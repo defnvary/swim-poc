@@ -1,21 +1,21 @@
-import { pino } from "pino";
-import type { Model, ModelStatic } from "sequelize";
-import { config } from "../config.js";
-import { db } from "../db/sequelize.js";
-import { event } from "./audit.js";
+import { pino } from 'pino';
+import type { Model, ModelStatic } from 'sequelize';
+import { config } from '../config.js';
+import { db } from '../db/sequelize.js';
+import { event } from './audit.js';
 import {
   appHealth,
   compose,
   removeAppData,
   upDetachedNoBuild,
-} from "./docker.js";
-import { removeVhosts } from "./nginx.js";
+} from './docker.js';
+import { removeVhosts } from './nginx.js';
 
 // 07 §2 — per-app serial FIFO + global build semaphore. The pipeline body itself is
 // services/deploy.ts, injected at boot by index.ts via setDeployRunner (tests leave it
 // unwired, so queued rows stay queued — the 11 §4 observation seam).
 
-const log = pino({ level: "info" });
+const log = pino({ level: 'info' });
 
 export type DeployRunner = (
   appId: string,
@@ -109,7 +109,7 @@ export const queueDeployment = (
     if (!runner) {
       log.info(
         { appId, deploymentId },
-        "deploy pipeline not wired (tests only) — row stays queued",
+        'deploy pipeline not wired (tests only) — row stays queued',
       );
       return;
     }
@@ -122,22 +122,22 @@ export const queueDeployment = (
 export const recoverOnBoot = async (): Promise<void> => {
   const [stuck, queued] = await Promise.all([
     Deployments.findAll({
-      where: { status: ["fetching", "building", "deploying"] },
+      where: { status: ['fetching', 'building', 'deploying'] },
     }),
     Deployments.findAll({
-      where: { status: "queued" },
-      order: [["createdAt", "ASC"]],
+      where: { status: 'queued' },
+      order: [['createdAt', 'ASC']],
     }),
   ]);
   for (const d of stuck) {
     await d.update({
-      status: "failed",
-      error: "api restarted during deployment",
+      status: 'failed',
+      error: 'api restarted during deployment',
       finishedAt: new Date(),
     });
     await event(
-      "deploy.failed",
-      { targetType: "deployment", targetId: d.id },
+      'deploy.failed',
+      { targetType: 'deployment', targetId: d.id },
       { error: d.error ?? undefined },
     );
   }
@@ -147,16 +147,16 @@ export const recoverOnBoot = async (): Promise<void> => {
 // 07 §10 step 5: a live app whose container is gone (host reboot, external kill) gets
 // `up -d --no-build`. Idempotent — a running container makes it a no-op; failures only log.
 export const reconcileApps = async (): Promise<void> => {
-  const apps = await Apps.findAll({ where: { status: "live" } });
+  const apps = await Apps.findAll({ where: { status: 'live' } });
   for (const app of apps) {
-    if ((await appHealth(app.slug)) === "missing") {
+    if ((await appHealth(app.slug)) === 'missing') {
       log.info(
         { slug: app.slug },
-        "live app has no container — up -d --no-build",
+        'live app has no container — up -d --no-build',
       );
       const res = await upDetachedNoBuild(app.slug);
       if (res.code !== 0)
-        log.error({ slug: app.slug, code: res.code }, "app restart failed");
+        log.error({ slug: app.slug, code: res.code }, 'app restart failed');
     }
   }
 };
@@ -169,7 +169,7 @@ export const teardownApp = async (app: {
   hosts: string[];
   deploymentIds: string[];
 }): Promise<void> => {
-  await compose(app.slug, ["down"], { rmi: true });
+  await compose(app.slug, ['down'], { rmi: true });
   await removeVhosts(app.hosts);
   await removeAppData(app.slug, app.deploymentIds);
 };

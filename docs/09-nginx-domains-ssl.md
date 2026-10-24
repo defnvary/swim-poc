@@ -191,6 +191,11 @@ Every vhost change follows the same sequence:
 
 `nginx -t` + reload take under 100 ms — no batching, no debounce.
 
+Not-running is not a config error: if the `swim-nginx` container is not up yet (compose
+starts it only after api is healthy, `08-docker-strategy.md` §2), steps 2–3 are skipped and
+the generated file stays on the volume — nginx reads `conf.d/apps/` when it starts. Deleting
+the file in that case would make the platform bootstrap impossible (see §7).
+
 ## 5. Domain lifecycle (`routes/domains.ts` + services)
 
 **Add domain** (`POST /api/apps/:id/domains`):
@@ -245,6 +250,13 @@ Run by boot reconciliation (07 §10) when the platform cert is missing:
 3. On success, write the stage-2 platform vhost → reload. On failure, log the certbot error and retry on next boot; the operator checks DNS per `13-setup-guide.md`.
 
 First boot is therefore HTTPS-dark for roughly 30–60 seconds while the certificate issues. The dashboard is unreachable until then — by design, since serving it would require a certificate that does not exist yet.
+
+Ordering note: api reconciles *before* it listens, and compose starts nginx only after api
+is healthy (§2, `08-docker-strategy.md`), so on a cold boot nginx is never running during
+step 1. Swim writes the stage-1 vhost, lets it stay on the volume, and repeats step 2 once
+the `swim-nginx` container is up (checked every 10 s, bounded to 5 minutes). Past that bound
+the issuance simply failed and the "retry on next boot" rule above applies — the operator can
+also trigger it with `docker compose restart api`.
 
 ## 8. Daily timer (`services/certs.ts`)
 

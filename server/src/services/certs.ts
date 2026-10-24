@@ -1,11 +1,11 @@
-import { access, rm, stat } from "node:fs/promises";
-import { resolve4 } from "node:dns/promises";
-import { join } from "node:path";
-import { pino } from "pino";
-import { Op } from "sequelize";
-import type { Model, ModelStatic } from "sequelize";
-import { db } from "../db/sequelize.js";
-import { event } from "./audit.js";
+import { access, rm, stat } from 'node:fs/promises';
+import { resolve4 } from 'node:dns/promises';
+import { join } from 'node:path';
+import { pino } from 'pino';
+import { Op } from 'sequelize';
+import type { Model, ModelStatic } from 'sequelize';
+import { db } from '../db/sequelize.js';
+import { event } from './audit.js';
 import {
   deploymentLogFile,
   issueCertArgs,
@@ -14,24 +14,25 @@ import {
   renewCertArgs,
   runCertbot,
   reloadNginx,
-} from "./docker.js";
+  nginxRunning,
+} from './docker.js';
 import {
   renderPlatformVhost,
   renderVhostStage1,
   renderVhostStage2,
   writeVhostAndReload,
   platformHost,
-} from "./nginx.js";
+} from './nginx.js';
 
 // issueCert + DNS verification + the daily renewal entry point (09 §5, §6, §8)
 
-const log = pino({ level: "info" });
+const log = pino({ level: 'info' });
 
 interface DomainInstance extends Model {
   id: string;
   appId: string;
   host: string;
-  certStatus: "pending" | "issued" | "failed";
+  certStatus: 'pending' | 'issued' | 'failed';
   certIssuedAt: Date | null;
 }
 const Domains = db.Domain as unknown as ModelStatic<DomainInstance>;
@@ -84,7 +85,7 @@ export const issueCert = async (
     const res = await runCertbot(issueCertArgs(host));
     if (res.code !== 0)
       throw new Error(
-        `certbot exited ${res.code}: ${res.output.split("\n").slice(-5).join("\n")}`,
+        `certbot exited ${res.code}: ${res.output.split('\n').slice(-5).join('\n')}`,
       );
     if (domainId) {
       const app = await Apps.findByPk(
@@ -95,12 +96,12 @@ export const issueCert = async (
         renderVhostStage2(host, app!.slug, app!.port),
       );
       await Domains.update(
-        { certStatus: "issued", certIssuedAt: new Date() },
+        { certStatus: 'issued', certIssuedAt: new Date() },
         { where: { id: domainId } },
       );
       await event(
-        "domain.cert_issued",
-        { targetType: "domain", targetId: domainId },
+        'domain.cert_issued',
+        { targetType: 'domain', targetId: domainId },
         { host },
       );
     } else {
@@ -111,16 +112,16 @@ export const issueCert = async (
     const error = err instanceof Error ? err.message : String(err);
     if (domainId) {
       await Domains.update(
-        { certStatus: "failed" },
+        { certStatus: 'failed' },
         { where: { id: domainId } },
       );
       await event(
-        "domain.cert_failed",
-        { targetType: "domain", targetId: domainId },
+        'domain.cert_failed',
+        { targetType: 'domain', targetId: domainId },
         { host, error },
       );
     } else {
-      log.error({ host, error }, "platform cert issuance failed");
+      log.error({ host, error }, 'platform cert issuance failed');
     }
     return false;
   }
@@ -131,9 +132,9 @@ export const renewAll = async (): Promise<void> => {
   try {
     const res = await runCertbot(renewCertArgs());
     if (res.code !== 0) throw new Error(`certbot renew exited ${res.code}`);
-    await reloadNginx(["nginx", "-s", "reload"]);
+    await reloadNginx(['nginx', '-s', 'reload']);
   } catch (err) {
-    log.error({ err }, "cert renewal failed");
+    log.error({ err }, 'cert renewal failed');
   }
 };
 
@@ -147,10 +148,38 @@ export const reconcilePlatformCert = async (): Promise<boolean> => {
     await writeVhostAndReload(host, renderPlatformVhost(host));
     return true;
   }
-  await writeVhostAndReload(host, renderVhostStage1(host));
+  await writeVhostAndReload(host, renderVhostStage1(host)); // kept even if nginx is down
+  if (!(await nginxRunning())) {
+    log.info({ host }, 'swim-nginx not up yet — scheduling the certbot challenge retry');
+    bootstrapWhenNginxUp();
+    return false;
+  }
   const ok = await issueCert(host);
-  log.info({ host, issued: ok }, "platform certificate bootstrap");
+  log.info({ host, issued: ok }, 'platform certificate bootstrap');
   return ok;
+};
+
+// 09 §7 needs HTTP-01 reachable, but compose starts swim-nginx only once api is healthy
+// (08 §2) — strictly after boot reconciliation. The stage-1 vhost is already on the volume
+// nginx mounts, so it serves the challenge as soon as nginx starts: retry from there.
+// Bounded (5 min); past that, 09 §7's "retry on next boot" applies.
+const bootstrapWhenNginxUp = (timeoutMs = 300_000): void => {
+  const deadline = Date.now() + timeoutMs;
+  const attempt = async (): Promise<void> => {
+    const host = platformHost();
+    if (!(await nginxRunning())) {
+      if (Date.now() > deadline) {
+        log.warn({ host }, 'platform cert bootstrap deferred to the next boot');
+        return;
+      }
+      setTimeout(() => void attempt().catch((err) => log.error({ err }, 'bootstrap retry failed')), 10_000).unref();
+      return;
+    }
+    await reloadNginx(['nginx', '-s', 'reload']); // pick up the stage-1 vhost written at boot
+    const ok = await issueCert(host);
+    log.info({ host, issued: ok }, 'platform certificate bootstrap (after nginx start)');
+  };
+  void attempt().catch((err) => log.error({ err }, 'bootstrap retry failed'));
 };
 
 // ---- 09 §8 step 2 = 08 §6 + 05 §6. The api container sees the swim-data volume at
@@ -163,7 +192,7 @@ const REFRESH_TOKEN_GRACE_DAYS = 30; // 05 §3 step 5
 
 // `docker images` prints newest-first; keep 5 tags, rmi the rest, in-use errors ignored.
 const pruneImages = async (): Promise<void> => {
-  const apps = await Apps.findAll({ attributes: ["slug"] });
+  const apps = await Apps.findAll({ attributes: ['slug'] });
   for (const app of apps) {
     const tags = await listAppImages(app.slug);
     for (const tag of tags.slice(KEEP_IMAGES)) await removeImage(tag);
@@ -172,7 +201,7 @@ const pruneImages = async (): Promise<void> => {
 
 const pruneDeploymentLogs = async (): Promise<void> => {
   const apps = await Apps.findAll({
-    include: [{ model: Deployments, attributes: ["id"] }],
+    include: [{ model: Deployments, attributes: ['id'] }],
   });
   for (const app of apps) {
     const ids = (
@@ -216,9 +245,9 @@ const pruneDb = async (): Promise<void> => {
 export const pruneAll = async (): Promise<void> => {
   // each step fails alone (09 §8: every error logged)
   const steps: [string, () => Promise<void>][] = [
-    ["image pruning", pruneImages],
-    ["deployment-log pruning", pruneDeploymentLogs],
-    ["event/refresh-token pruning", pruneDb],
+    ['image pruning', pruneImages],
+    ['deployment-log pruning', pruneDeploymentLogs],
+    ['event/refresh-token pruning', pruneDb],
   ];
   for (const [name, step] of steps) {
     try {
@@ -239,8 +268,8 @@ export const startDailyTimer = ({
 }: { renewNow?: boolean } = {}): NodeJS.Timeout => {
   const tick = (renew: boolean): void => {
     if (renew)
-      void renewAll().catch((err) => log.error({ err }, "renewal tick failed"));
-    void pruneAll().catch((err) => log.error({ err }, "pruning tick failed"));
+      void renewAll().catch((err) => log.error({ err }, 'renewal tick failed'));
+    void pruneAll().catch((err) => log.error({ err }, 'pruning tick failed'));
     timer.refresh();
   };
   const timer = setInterval(() => tick(true), DAY_MS);
@@ -252,7 +281,7 @@ export const startDailyTimer = ({
 // Cert path helper (04 §2): the api mounts swim-certs at /etc/letsencrypt (08 §2),
 // so inside the container certbot's tree lives there — confirmed in phase 6.
 export const certDir = (host: string): string =>
-  join("/etc/letsencrypt", "live", host);
+  join('/etc/letsencrypt', 'live', host);
 export const certExists = async (host: string): Promise<boolean> =>
   access(`${certDir(host)}/fullchain.pem`)
     .then(() => true)

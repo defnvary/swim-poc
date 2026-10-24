@@ -1,21 +1,21 @@
-import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { pino } from "pino";
-import type { Model, ModelStatic } from "sequelize";
-import { config } from "../config.js";
-import { db } from "../db/sequelize.js";
-import { reloadNginx } from "./docker.js";
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { pino } from 'pino';
+import type { Model, ModelStatic } from 'sequelize';
+import { config } from '../config.js';
+import { db } from '../db/sequelize.js';
+import { nginxRunning, reloadNginx } from './docker.js';
 
 // One vhost file per Domain row, written to the swim-conf volume (09 §1).
 // All templates are deterministic functions of (host, slug, port, SWIM_DOMAIN) —
 // reconciliation depends on byte-identical regeneration (09 §3, 07 §10).
 
-const log = pino({ level: "info" });
-const NGINX_DIR = join(config.dataDir, "nginx");
+const log = pino({ level: 'info' });
+const NGINX_DIR = join(config.dataDir, 'nginx');
 
 interface DomainLite extends Model {
   host: string;
-  certStatus: "pending" | "issued" | "failed";
+  certStatus: 'pending' | 'issued' | 'failed';
   App: { slug: string; port: number } | null;
 }
 interface AppLite extends Model {
@@ -118,7 +118,7 @@ export const renderVhost = (
   port?: number,
 ): string =>
   certIssued
-    ? renderVhostStage2(host, slug ?? "", port ?? 0)
+    ? renderVhostStage2(host, slug ?? '', port ?? 0)
     : renderVhostStage1(host);
 
 // 09 §4 step 1: write <host>.conf.tmp then rename() — atomic replace
@@ -130,6 +130,16 @@ export const writeVhost = async (
   await writeFileAtomic(join(NGINX_DIR, `${host}.conf`), content);
 };
 
+// 09 §4 step 2, with the cold-boot case separated from a genuine config error:
+//  invalid — nginx -t rejected the file → the file is removed, previous config keeps running
+//  absent  — swim-nginx is not running yet (compose starts it after api is healthy, 08 §2)
+//            → the file stays on the volume and is read when nginx starts, no reload needed
+const nginxTest = async (): Promise<'ok' | 'invalid' | 'absent'> => {
+  if (!(await nginxRunning())) return 'absent';
+  const test = await reloadNginx(['nginx', '-t']);
+  return test.code === 0 ? 'ok' : 'invalid';
+};
+
 // The full §4 sequence for a change: write → nginx -t (delete the offending file
 // on failure, previous config keeps running) → reload.
 export const writeVhostAndReload = async (
@@ -137,13 +147,17 @@ export const writeVhostAndReload = async (
   content: string,
 ): Promise<void> => {
   await writeVhost(host, content);
-  const test = await reloadNginx(["nginx", "-t"]);
-  if (test.code !== 0) {
+  const test = await nginxTest();
+  if (test === 'invalid') {
     await removeVhost(host);
     log.error(`nginx config test failed for ${host}`);
     return;
   }
-  await reloadNginx(["nginx", "-s", "reload"]);
+  if (test === 'absent') {
+    log.info(`swim-nginx not running — kept ${host}.conf, loaded when nginx starts`);
+    return;
+  }
+  await reloadNginx(['nginx', '-s', 'reload']);
 };
 
 const writeFileAtomic = async (
@@ -151,7 +165,7 @@ const writeFileAtomic = async (
   content: string,
 ): Promise<void> => {
   const tmp = `${target}.tmp`;
-  await writeFile(tmp, content, "utf8");
+  await writeFile(tmp, content, 'utf8');
   await rename(tmp, target);
 };
 
@@ -169,12 +183,12 @@ export const removeVhosts = async (hosts: string[]): Promise<void> => {
 // stage 1), then ONE reload. Unchanged files are byte-identical no-ops (§09 §3).
 export const rewriteAllVhosts = async (): Promise<void> => {
   const domains = await Domains.findAll({
-    include: [{ model: Apps, as: "App", attributes: ["slug", "port"] }],
+    include: [{ model: Apps, as: 'App', attributes: ['slug', 'port'] }],
   });
   for (const d of domains) {
     const content = renderVhost(
       d.host,
-      d.certStatus === "issued",
+      d.certStatus === 'issued',
       d.App?.slug,
       d.App?.port,
     );
@@ -183,12 +197,17 @@ export const rewriteAllVhosts = async (): Promise<void> => {
   await reload(); // throws on `nginx -t` failure — boot log records it, startup continues
 };
 
-// 09 §4: nginx -t must pass before the reload is issued
+// 09 §4: nginx -t must pass before the reload is issued. Not-running is not a failure —
+// the generated files are already on the volume nginx mounts at start (08 §2).
 export const reload = async (): Promise<void> => {
-  const test = await reloadNginx(["nginx", "-t"]);
-  if (test.code !== 0) throw new Error("nginx config test failed");
-  await reloadNginx(["nginx", "-s", "reload"]);
+  const test = await nginxTest();
+  if (test === 'invalid') throw new Error('nginx config test failed');
+  if (test === 'absent') {
+    log.info('swim-nginx not running — vhost files kept, loaded when nginx starts');
+    return;
+  }
+  await reloadNginx(['nginx', '-s', 'reload']);
 };
 
 export const platformHost = (): string =>
-  `swim.${config.swimDomain ?? "swim.local"}`;
+  `swim.${config.swimDomain ?? 'swim.local'}`;

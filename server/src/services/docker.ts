@@ -1,25 +1,25 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { config } from "../config.js";
-import { run, type RunResult } from "../lib/exec.js";
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { config } from '../config.js';
+import { run, type RunResult } from '../lib/exec.js';
 
 // Thin wrappers around docker CLI (04 §2, 07 §5, 09 §6). Fixed argument arrays only.
 
 // Volume names come from the platform compose project name `swim` (09 §6)
-export const CERTS_VOLUME = "swim_swim-certs";
-export const WEBROOT_VOLUME = "swim_swim-webroot";
-export const EDGE_NETWORK = "swim-edge";
+export const CERTS_VOLUME = 'swim_swim-certs';
+export const WEBROOT_VOLUME = 'swim_swim-webroot';
+export const EDGE_NETWORK = 'swim-edge';
 
 export const appDir = (slug: string): string =>
-  join(config.dataDir, "apps", slug);
-export const srcDir = (slug: string): string => join(appDir(slug), "src");
+  join(config.dataDir, 'apps', slug);
+export const srcDir = (slug: string): string => join(appDir(slug), 'src');
 const composeFile = (slug: string): string =>
-  join(appDir(slug), "compose.yaml");
+  join(appDir(slug), 'compose.yaml');
 const projectName = (slug: string): string => `swim-app-${slug}`;
 
 // 06 §13 — one plain-text log file per deployment, appended across all steps (07 §8)
 export const deploymentLogFile = (deploymentId: string): string =>
-  join(config.dataDir, "logs/deployments", `${deploymentId}.log`);
+  join(config.dataDir, 'logs/deployments', `${deploymentId}.log`);
 
 export interface ComposeOptions {
   noBuild?: boolean;
@@ -35,10 +35,10 @@ export const compose = async (
   args: string[],
   opts: ComposeOptions = {},
 ): Promise<RunResult> => {
-  const full = ["-p", projectName(slug), "-f", composeFile(slug), ...args];
-  if (opts.noBuild) full.push("--no-build");
-  if (opts.rmi) full.push("--rmi", "local");
-  return run("docker", ["compose", ...full], {
+  const full = ['-p', projectName(slug), '-f', composeFile(slug), ...args];
+  if (opts.noBuild) full.push('--no-build');
+  if (opts.rmi) full.push('--rmi', 'local');
+  return run('docker', ['compose', ...full], {
     onLine: opts.onLine,
     redact: opts.redact,
     signal: opts.signal,
@@ -47,13 +47,13 @@ export const compose = async (
 
 // 07 §6 — docker inspect --format {{.State.Health.Status}} swim-app-<slug>
 export const appHealth = async (slug: string): Promise<string> => {
-  const res = await run("docker", [
-    "inspect",
-    "--format",
-    "{{.State.Health.Status}}",
+  const res = await run('docker', [
+    'inspect',
+    '--format',
+    '{{.State.Health.Status}}',
     `swim-app-${slug}`,
   ]);
-  return res.code === 0 ? res.output.trim() : "missing";
+  return res.code === 0 ? res.output.trim() : 'missing';
 };
 
 export interface AppLogsOptions {
@@ -68,20 +68,20 @@ export const appLogs = async (
   slug: string,
   opts: AppLogsOptions = {},
 ): Promise<RunResult> => {
-  const args = ["logs"];
-  if (opts.tail !== undefined) args.push("--tail", String(opts.tail));
-  if (opts.since) args.push("--since", opts.since);
-  if (opts.follow) args.push("-f");
+  const args = ['logs'];
+  if (opts.tail !== undefined) args.push('--tail', String(opts.tail));
+  if (opts.since) args.push('--since', opts.since);
+  if (opts.follow) args.push('-f');
   args.push(`swim-app-${slug}`);
-  return run("docker", args, { onLine: opts.onLine, signal: opts.signal });
+  return run('docker', args, { onLine: opts.onLine, signal: opts.signal });
 };
 
 // 07 §10 step 2: inspect, create when missing — idempotent. A failing CREATE is an
 // error (daemon unreachable) — reconciliation must report the truth, not "present".
 export const ensureEdgeNetwork = async (): Promise<void> => {
-  const inspect = await run("docker", ["network", "inspect", EDGE_NETWORK]);
+  const inspect = await run('docker', ['network', 'inspect', EDGE_NETWORK]);
   if (inspect.code !== 0) {
-    const create = await run("docker", ["network", "create", EDGE_NETWORK]);
+    const create = await run('docker', ['network', 'create', EDGE_NETWORK]);
     if (create.code !== 0)
       throw new Error(
         `docker network create ${EDGE_NETWORK} exited ${create.code}: ${create.output.trim()}`,
@@ -95,33 +95,33 @@ export const appImageTag = (slug: string, sha8: string): string =>
 
 // `docker images swim/<slug>` lists that repo's tags, newest first (the default sort)
 export const listAppImages = async (slug: string): Promise<string[]> => {
-  const res = await run("docker", [
-    "images",
+  const res = await run('docker', [
+    'images',
     `swim/${slug}`,
-    "--format",
-    "{{.Repository}}:{{.Tag}}",
+    '--format',
+    '{{.Repository}}:{{.Tag}}',
   ]);
-  return res.code === 0 ? res.output.split("\n").filter(Boolean) : [];
+  return res.code === 0 ? res.output.split('\n').filter(Boolean) : [];
 };
 
 export const removeImage = async (tag: string): Promise<void> => {
-  await run("docker", ["rmi", tag]).catch(() => undefined); // tags in use error out — ignore (08 §6)
+  await run('docker', ['rmi', tag]).catch(() => undefined); // tags in use error out — ignore (08 §6)
 };
 
 // 07 §10 step 5: crash recovery for live apps — best effort
 export const upDetachedNoBuild = (slug: string): Promise<RunResult> =>
-  compose(slug, ["up", "-d"], { noBuild: true });
+  compose(slug, ['up', '-d'], { noBuild: true });
 
 // 09 §6 — exact certbot invocations, issued via docker run (no certbot on the host)
 const certbotRun = (certbotArgs: string[]): Promise<RunResult> =>
-  run("docker", [
-    "run",
-    "--rm",
-    "-v",
+  run('docker', [
+    'run',
+    '--rm',
+    '-v',
     `${CERTS_VOLUME}:/etc/letsencrypt`,
-    "-v",
+    '-v',
     `${WEBROOT_VOLUME}:/var/www/certbot`,
-    "certbot/certbot:latest",
+    'certbot/certbot:latest',
     ...certbotArgs,
   ]);
 
@@ -135,31 +135,44 @@ export const runCertbot = (
   });
 
 export const issueCertArgs = (host: string): string[] => [
-  "certonly",
-  "--webroot",
-  "-w",
-  "/var/www/certbot",
-  "-d",
+  'certonly',
+  '--webroot',
+  '-w',
+  '/var/www/certbot',
+  '-d',
   host,
-  "--email",
-  config.acmeEmail ?? "admin@localhost",
-  "--agree-tos",
-  "--no-eff-email",
-  "--non-interactive",
-  "--keep-until-expiring",
+  '--email',
+  config.acmeEmail ?? 'admin@localhost',
+  '--agree-tos',
+  '--no-eff-email',
+  '--non-interactive',
+  '--keep-until-expiring',
 ];
 
 export const renewCertArgs = (): string[] => [
-  "renew",
-  "--webroot",
-  "-w",
-  "/var/www/certbot",
+  'renew',
+  '--webroot',
+  '-w',
+  '/var/www/certbot',
 ];
 
 // 09 §4 — docker exec swim-nginx nginx -t / nginx -s reload
 // 09 §4 — docker exec swim-nginx nginx -t / nginx -s reload
 export const reloadNginx = async (args: string[]): Promise<RunResult> =>
-  run("docker", ["exec", "swim-nginx", ...args]);
+  run('docker', ['exec', 'swim-nginx', ...args]);
+
+// Is the edge container up? On a cold boot compose starts nginx only after api is
+// healthy (08 §2), so reconciliation must not read "cannot exec into a stopped
+// container" as a config error.
+export const nginxRunning = async (): Promise<boolean> => {
+  const res = await run('docker', [
+    'inspect',
+    '--format',
+    '{{.State.Running}}',
+    'swim-nginx',
+  ]);
+  return res.code === 0 && res.output.trim() === 'true';
+};
 
 // 05 §4 — app deletion removes the <dataDir>/apps/<slug> tree and that app's deployment log files
 export const removeAppData = async (
@@ -180,14 +193,14 @@ export interface ComposeParams {
   sha8: string;
   port: number;
   healthcheckPath: string;
-  buildType: "auto" | "dockerfile" | "node" | "static";
+  buildType: 'auto' | 'dockerfile' | 'node' | 'static';
 }
 
 export const renderCompose = (p: ComposeParams): string => {
-  const repoDockerfile = p.buildType === "dockerfile";
+  const repoDockerfile = p.buildType === 'dockerfile';
   const build = repoDockerfile
-    ? "      context: ./src\n      dockerfile: Dockerfile"
-    : "      context: .\n      dockerfile: Dockerfile.swim";
+    ? '      context: ./src\n      dockerfile: Dockerfile'
+    : '      context: .\n      dockerfile: Dockerfile.swim';
   const url = `http://127.0.0.1:${p.port}${p.healthcheckPath}`;
   return `# generated by Swim — do not edit
 services:
@@ -216,5 +229,5 @@ networks:
 // Generated files live outside the cloned source (07 §4.2) — the service owns /data writes (04 §5)
 export const writeCompose = async (p: ComposeParams): Promise<void> => {
   await mkdir(appDir(p.slug), { recursive: true });
-  await writeFile(composeFile(p.slug), renderCompose(p), "utf8");
+  await writeFile(composeFile(p.slug), renderCompose(p), 'utf8');
 };
