@@ -1,15 +1,22 @@
 import express from 'express';
 import helmet from 'helmet';
-import pino from 'pino';
+import { pino } from 'pino';
 import { sequelize } from './db/sequelize.js';
+import { authRouter } from './routes/auth.js';
+import { eventsRouter } from './routes/events.js';
+import { usersRouter } from './routes/users.js';
+import { errorMiddleware } from './middleware/error.js';
+import { apiLimiter } from './middleware/rate-limit.js';
 
 const log = pino({ level: 'info' });
 const VERSION = '1.0.0';
 
-const app = express();
+// 04 §2 order: helmet → rate limits → /api routers → static SPA (phase 6) → 404 → error middleware
+export const app = express();
 app.use(helmet());
+app.use(express.json());
 
-// 06 §11 — public, no auth, checked by the swim-api Docker healthcheck
+// 06 §11 — public, no auth, exempt from the api limiter, checked by the swim-api Docker healthcheck
 app.get('/api/health', async (_req, res) => {
   try {
     await sequelize.query('SELECT 1');
@@ -18,6 +25,17 @@ app.get('/api/health', async (_req, res) => {
     res.status(500).json({ status: 'error', db: 'down', version: VERSION });
   }
 });
+
+app.use('/api', apiLimiter);
+app.use('/api/auth', authRouter);
+app.use('/api/users', usersRouter);
+app.use('/api/events', eventsRouter);
+
+app.use((_req, res) => {
+  res.status(404).json({ error: { code: 'not_found', message: 'not found' } });
+});
+
+app.use(errorMiddleware);
 
 const start = async () => {
   try {
@@ -29,4 +47,5 @@ const start = async () => {
   app.listen(3000, () => log.info('api listening on :3000'));
 };
 
-void start();
+// CLI entry: run boot + listen only when executed as the program, not when imported (tests)
+if (process.argv[1]?.includes('index')) void start();
