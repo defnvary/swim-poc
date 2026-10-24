@@ -8,9 +8,13 @@ import { deploymentsGlobalRouter, deploymentsRouter } from './routes/deployments
 import { domainsAppRouter, domainsGlobalRouter } from './routes/domains.js';
 import { envRouter } from './routes/env.js';
 import { eventsRouter } from './routes/events.js';
+import { hooksRouter } from './routes/hooks.js';
+import { logsRouter } from './routes/logs.js';
 import { usersRouter } from './routes/users.js';
 import { errorMiddleware } from './middleware/error.js';
 import { apiLimiter } from './middleware/rate-limit.js';
+import { runDeployment } from './services/deploy.js';
+import { recoverOnBoot, setDeployRunner } from './services/deploy-queue.js';
 
 const log = pino({ level: 'info' });
 const VERSION = '1.0.0';
@@ -18,6 +22,11 @@ const VERSION = '1.0.0';
 // 04 §2 order: helmet → rate limits → /api routers → static SPA (phase 6) → 404 → error middleware
 export const app = express();
 app.use(helmet());
+
+// 06 §12/§14: hooks read the RAW body and use their own limiter — mount before
+// express.json and before the apiLimiter (hooks are exempt from it).
+app.use('/api/hooks', hooksRouter);
+
 app.use(express.json());
 
 // 06 §11 — public, no auth, exempt from the api limiter, checked by the swim-api Docker healthcheck
@@ -37,6 +46,7 @@ app.use('/api/events', eventsRouter);
 app.use('/api/apps', appsRouter);
 app.use('/api/apps/:id/deployments', deploymentsRouter);
 app.use('/api/deployments', deploymentsGlobalRouter);
+app.use('/api/apps/:id/logs', logsRouter);
 app.use('/api/apps/:id/domains', domainsAppRouter);
 app.use('/api/domains', domainsGlobalRouter);
 app.use('/api/apps/:id/env', envRouter);
@@ -53,6 +63,15 @@ const start = async () => {
     log.info('db connected');
   } catch (err) {
     log.error({ err }, 'db unavailable at boot');
+  }
+  // 07 §2: the pipeline runs only in the real process — tests import `app` without
+  // start(), so the seam stays unwired and queued rows stay queued (11 §4).
+  setDeployRunner(runDeployment);
+  // Full boot reconciliation (07 §10) is phase 6; the queue part is here (07 §2).
+  try {
+    await recoverOnBoot();
+  } catch (err) {
+    log.error({ err }, 'deploy queue recovery failed at boot');
   }
   app.listen(3000, () => log.info('api listening on :3000'));
 };

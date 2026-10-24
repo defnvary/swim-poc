@@ -1,10 +1,14 @@
 import { pino } from 'pino';
+import type { Model, ModelStatic } from 'sequelize';
+import { config } from '../config.js';
+import { db } from '../db/sequelize.js';
+import { event } from './audit.js';
 import { compose, removeAppData } from './docker.js';
 import { removeVhosts } from './nginx.js';
 
-// Per-app serial FIFO + global build semaphore (07 §2).
-// PHASE-3 SEAM: routes insert the queued Deployment row and hand the pipeline body
-// here; execution becomes real when services/deploy.ts exists (phase 4).
+// 07 §2 — per-app serial FIFO + global build semaphore. The pipeline body itself is
+// services/deploy.ts, injected at boot by index.ts via setDeployRunner (tests leave it
+// unwired, so queued rows stay queued — the 11 §4 observation seam).
 
 const log = pino({ level: 'info' });
 
@@ -12,22 +16,29 @@ export type DeployRunner = (appId: string, deploymentId: string) => Promise<void
 
 let runner: DeployRunner | null = null;
 
-// phase 4 wires this to runDeployment from services/deploy.ts
 export const setDeployRunner = (r: DeployRunner): void => {
   runner = r;
 };
 
-// Phase-3 observation seam (11 §4 "applyNow triggers a deploy, queue mocked to observe"):
-// set to a spy in integration tests; production never sets it.
+// Observation seam (11 §4): set to a spy in integration tests; production never sets it.
 let observer: ((appId: string, deploymentId: string) => void) | null = null;
 export const setDeployObserver = (fn: ((appId: string, deploymentId: string) => void) | null): void => {
   observer = fn;
 };
 
+interface DeploymentLite extends Model {
+  id: string;
+  appId: string;
+  status: string;
+  error: string | null;
+  finishedAt: Date | null;
+}
+const Deployments = db.Deployment as unknown as ModelStatic<DeploymentLite>;
+
+// ---- per-app serial FIFO: arrival order = execution order, a rejected task
+// never poisons the chain, and a settled chain entry is dropped (no leak).
 const chains = new Map<string, Promise<void>>();
 
-// Arrival order per app = execution order; different apps run concurrently;
-// a rejected task never poisons the chain.
 export const enqueue = (appId: string, task: () => Promise<void>): Promise<void> => {
   const prev = chains.get(appId) ?? Promise.resolve();
   const next = prev.catch(() => undefined).then(task);
@@ -39,16 +50,61 @@ export const enqueue = (appId: string, task: () => Promise<void>): Promise<void>
   return next;
 };
 
-// Manual deploys pass the phase-2 row; the pipeline runs serialized per app.
+// ---- global build semaphore: acquired before `compose build`, released right after
+// `up -d` — health polling never holds a slot (07 §2, §5).
+export type BuildRelease = () => void;
+
+let active = 0;
+const buildWaiters: (() => void)[] = [];
+
+const makeRelease = (): BuildRelease => {
+  let done = false;
+  return () => {
+    if (done) return; // idempotent — a double release must not corrupt the counter
+    done = true;
+    active--;
+    buildWaiters.shift()?.();
+  };
+};
+
+export const acquireBuildSlot = (): Promise<BuildRelease> => {
+  if (active < config.maxBuilds) {
+    active++;
+    return Promise.resolve(makeRelease());
+  }
+  return new Promise((resolve) => {
+    buildWaiters.push(() => {
+      active++;
+      resolve(makeRelease());
+    });
+  });
+};
+
+// The queued row is inserted by the route/hook before enqueueing (07 §2); the 202 has
+// already returned when this runs.
 export const queueDeployment = (appId: string, deploymentId: string): Promise<void> => {
   observer?.(appId, deploymentId);
   return enqueue(appId, async () => {
     if (!runner) {
-      log.info({ appId, deploymentId }, 'deploy pipeline not wired yet (phase 4) — row stays queued');
+      log.info({ appId, deploymentId }, 'deploy pipeline not wired (tests only) — row stays queued');
       return;
     }
     await runner(appId, deploymentId);
   });
+};
+
+// 07 §2: an api restart kills in-flight child processes; a non-terminal, non-queued row
+// can only be stale. Queued rows are re-enqueued (their pipeline never started).
+export const recoverOnBoot = async (): Promise<void> => {
+  const [stuck, queued] = await Promise.all([
+    Deployments.findAll({ where: { status: ['fetching', 'building', 'deploying'] } }),
+    Deployments.findAll({ where: { status: 'queued' }, order: [['createdAt', 'ASC']] }),
+  ]);
+  for (const d of stuck) {
+    await d.update({ status: 'failed', error: 'api restarted during deployment', finishedAt: new Date() });
+    await event('deploy.failed', { targetType: 'deployment', targetId: d.id }, { error: d.error ?? undefined });
+  }
+  for (const d of queued) void queueDeployment(d.appId, d.id);
 };
 
 // 05 §4 teardown, in order: compose down --rmi local, vhosts + reload, /data + logs.

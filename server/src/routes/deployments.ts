@@ -2,8 +2,10 @@ import { Router } from 'express';
 import { Op, type Model, type ModelStatic } from 'sequelize';
 import { z } from 'zod';
 import { db } from '../db/sequelize.js';
+import { openSSE } from '../lib/sse.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { HttpError } from '../middleware/error.js';
+import { subscribeDeploymentLog, tailDeploymentLog } from '../services/deploy.js';
 import { queueDeployment } from '../services/deploy-queue.js';
 import { event } from '../services/audit.js';
 
@@ -127,4 +129,62 @@ deploymentsGlobalRouter.get('/:id', async (req, res) => {
   if (!deployment) throw new HttpError(404, 'not_found', 'deployment not found');
   const [json] = await withUser([deployment]);
   res.json(json);
+});
+
+// 06 §6 + §13 — GET /api/deployments/:id/logs?tail&follow=1: tail the 07 §8 file,
+// then (while the deployment is active) stream live log/status events, `done` closes.
+const ACTIVE: DeploymentInstance['status'][] = ['queued', 'fetching', 'building', 'deploying'];
+
+const logsQuerySchema = z
+  .object({
+    tail: z.coerce.number().int().min(1).max(10_000).default(200),
+    follow: z.coerce.boolean().default(false),
+  })
+  .strict();
+
+deploymentsGlobalRouter.get('/:id/logs', async (req, res) => {
+  const { tail, follow } = logsQuerySchema.parse(req.query);
+  const id = String((req.params as Record<string, string>).id);
+  const deployment = await Deployments.findByPk(id);
+  if (!deployment) throw new HttpError(404, 'not_found', 'deployment not found');
+
+  res.setTimeout(0);
+  let unsubscribe = (): void => {};
+  let closed = false;
+  const sse = openSSE(req, res, {
+    kill: () => {
+      closed = true;
+      unsubscribe();
+    },
+  });
+  const send = (event: string, data: unknown): void => {
+    if (!closed) sse.send(event, data);
+  };
+  const end = (): void => {
+    unsubscribe();
+    res.end();
+  };
+
+  const activeNow = ACTIVE.includes(deployment.status);
+  if (follow && activeNow) {
+    unsubscribe = subscribeDeploymentLog(id, (e) => {
+      if (e.type === 'log') send('log', { line: e.line });
+      else if (e.type === 'status') send('status', { status: e.status });
+      else {
+        send('done', { status: e.status });
+        end();
+      }
+    });
+  }
+
+  const lines = await tailDeploymentLog(id, tail);
+  for (const line of lines) send('log', { line });
+
+  // settled between the row read and the tail, or follow not requested → close now;
+  // subscribing first means late lines duplicate rather than drop (06 §13)
+  const fresh = follow && activeNow ? await Deployments.findByPk(id) : null;
+  if (!fresh || !ACTIVE.includes(fresh.status)) {
+    send('done', { status: fresh?.status ?? deployment.status });
+    end();
+  }
 });

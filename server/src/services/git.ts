@@ -49,6 +49,13 @@ export const fetchSource = async (
       { cwd: dir, redact, onLine: line, signal: opts.signal },
     );
     if (clone.code !== 0) throw new Error(`git clone failed (exit ${clone.code}): ${tail(clone)}`);
+    if (ref) {
+      // rollback/first deploy of a pinned SHA: branch HEAD was cloned, now move to the SHA
+      const fetch = await git(['fetch', '--depth', '1', 'origin', ref], { cwd: src, redact, onLine: line, signal: opts.signal });
+      if (fetch.code !== 0) throw new Error(`git fetch failed (exit ${fetch.code}): ${tail(fetch)}`);
+      const reset = await git(['reset', '--hard', 'FETCH_HEAD'], { cwd: src, redact, onLine: line });
+      if (reset.code !== 0) throw new Error(`git reset failed (exit ${reset.code}): ${tail(reset)}`);
+    }
   } else {
     const target = ref ?? app.branch;
     const fetch = await git(['fetch', '--depth', '1', 'origin', target], { cwd: src, redact, onLine: line, signal: opts.signal });
