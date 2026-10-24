@@ -9,12 +9,13 @@ export interface RunOptions {
   onLine?: (line: string) => void;
   redact?: string[];
   signal?: AbortSignal;
+  cwd?: string;
 }
 
 // The only place child processes spawn — fixed argument arrays, never a shell (03 §6.6, 10 §7)
 export const run = (cmd: string, args: string[], opts: RunOptions = {}): Promise<RunResult> =>
   new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { signal: opts.signal });
+    const child = spawn(cmd, args, { signal: opts.signal, cwd: opts.cwd });
     const lines: string[] = [];
 
     const emit = (raw: string) => {

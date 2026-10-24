@@ -196,11 +196,11 @@ Every vhost change follows the same sequence:
 **Add domain** (`POST /api/apps/:id/domains`):
 1. Validate syntax + uniqueness (06 §8), insert the Domain row with `certStatus = pending`.
 2. Write the stage-1 vhost → reload (§4).
-3. Fire-and-forget `issueCert(host)` — the HTTP response (201) returns immediately.
+3. Fire-and-forget `issueCert(host, domainId)` — the HTTP response (201) returns immediately.
 
-**`issueCert(host)`** (`services/certs.ts`):
+**`issueCert(host, domainId?)`** (`services/certs.ts`):
 1. Run certbot `certonly` (§6).
-2. Success → rewrite the stage-2 vhost → reload → `certStatus = issued`, `certIssuedAt = now`, `event('domain.cert_issued')`.
+2. Success → rewrite the stage-2 vhost → reload → `certStatus = issued`, `certIssuedAt = now`, `event('domain.cert_issued')`. With no `domainId` (the platform host, §8) there is no Domain row: the platform stage-2 vhost is written instead and the result is only logged.
 3. Failure (DNS not pointing yet, rate limit) → `certStatus = failed`, `event('domain.cert_failed', details: {error})`; the stage-1 vhost stays.
 
 **Delete domain** (`DELETE /api/domains/:id`): remove the vhost file → reload → delete the row. Cert files stay in the volume (certbot self-manages `/etc/letsencrypt/archive`); expiry cleans up the rest.

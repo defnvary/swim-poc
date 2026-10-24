@@ -2,7 +2,11 @@ import express from 'express';
 import helmet from 'helmet';
 import { pino } from 'pino';
 import { sequelize } from './db/sequelize.js';
+import { appsRouter } from './routes/apps.js';
 import { authRouter } from './routes/auth.js';
+import { deploymentsGlobalRouter, deploymentsRouter } from './routes/deployments.js';
+import { domainsAppRouter, domainsGlobalRouter } from './routes/domains.js';
+import { envRouter } from './routes/env.js';
 import { eventsRouter } from './routes/events.js';
 import { usersRouter } from './routes/users.js';
 import { errorMiddleware } from './middleware/error.js';
@@ -30,6 +34,12 @@ app.use('/api', apiLimiter);
 app.use('/api/auth', authRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/events', eventsRouter);
+app.use('/api/apps', appsRouter);
+app.use('/api/apps/:id/deployments', deploymentsRouter);
+app.use('/api/deployments', deploymentsGlobalRouter);
+app.use('/api/apps/:id/domains', domainsAppRouter);
+app.use('/api/domains', domainsGlobalRouter);
+app.use('/api/apps/:id/env', envRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: { code: 'not_found', message: 'not found' } });
