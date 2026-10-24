@@ -45,7 +45,7 @@ SWIM_JWT_SECRET=<base64 from step 2>
 POSTGRES_PASSWORD=<generated>
 DATABASE_URL=postgres://swim:<same password>@swim-db:5432/swim
 DOCKER_GID=<gid from step 2>
-# optional: SWIM_DEPLOY_TIMEOUT=120, SWIM_MAX_BUILDS=2
+# optional: SWIM_DEPLOY_TIMEOUT=120, SWIM_MAX_BUILDS=2, SWIM_DATA_DIR=/data (01 §4)
 ```
 
 ```bash

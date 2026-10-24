@@ -1,7 +1,9 @@
 import { access } from 'node:fs/promises';
 import { resolve4 } from 'node:dns/promises';
+import { join } from 'node:path';
 import { pino } from 'pino';
 import type { Model, ModelStatic } from 'sequelize';
+import { config } from '../config.js';
 import { db } from '../db/sequelize.js';
 import { event } from './audit.js';
 import { issueCertArgs, renewCertArgs, runCertbot, reloadNginx } from './docker.js';
@@ -84,6 +86,6 @@ export const renewAll = async (): Promise<void> => {
 
 // Cert path helper (04 §2): the api mounts the swim-certs volume; exact host path is
 // confirmed in phase 6 when docker-compose.yml is written (08 §2).
-export const certDir = (host: string): string => `/data/certs/live/${host}`;
+export const certDir = (host: string): string => join(config.dataDir, 'certs/live', host);
 export const certExists = async (host: string): Promise<boolean> =>
   access(`${certDir(host)}/fullchain.pem`).then(() => true).catch(() => false);

@@ -6,7 +6,7 @@ import { db } from '../db/sequelize.js';
 import { decrypt } from '../lib/crypto.js';
 import { event } from './audit.js';
 import { acquireBuildSlot } from './deploy-queue.js';
-import { appDir, appHealth, compose, srcDir, writeCompose } from './docker.js';
+import { appDir, appHealth, compose, deploymentLogFile, srcDir, writeCompose } from './docker.js';
 import { fetchSource } from './git.js';
 
 // 07 §3–§7 — fetching → dockerfile resolution → generated files → build → up -d → health → live.
@@ -46,8 +46,7 @@ const Apps = db.App as unknown as ModelStatic<AppInstance>;
 const EnvVars = db.EnvVar as unknown as ModelStatic<EnvInstance>;
 
 const HEAD_SHA = '0'.repeat(40);
-const LOG_DIR = '/data/logs/deployments';
-const logPath = (id: string): string => join(LOG_DIR, `${id}.log`);
+const logPath = deploymentLogFile;
 
 // ---- deployment-log hub (06 §13): live SSE subscribers per deployment id
 export type HubEvent =

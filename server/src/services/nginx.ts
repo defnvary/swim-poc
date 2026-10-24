@@ -9,7 +9,7 @@ import { reloadNginx } from './docker.js';
 // reconciliation depends on byte-identical regeneration (09 §3, 07 §10).
 
 const log = pino({ level: 'info' });
-const NGINX_DIR = '/data/nginx';
+const NGINX_DIR = join(config.dataDir, 'nginx');
 
 const acmeLocation = `  location /.well-known/acme-challenge/ {
     root /var/www/certbot;

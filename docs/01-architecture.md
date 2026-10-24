@@ -61,6 +61,8 @@ This document is the authoritative architecture overview. An AI agent building S
 | `swim-webroot` | `/var/www/certbot` | `/var/www/certbot` | ACME challenge files for HTTP-01 |
 | `swim-pgdata` | — | — | PostgreSQL data dir |
 
+All api-side paths above are resolved under `SWIM_DATA_DIR` (default `/data`). Production keeps the defaults (the volumes are mounted there); the override exists for local development and tests on machines where `/data` is not writable — e.g. `SWIM_DATA_DIR=./data` puts the same layout under the project directory.
+
 ## 5. Request routing
 
 **Dashboard / API request** (e.g. `https://swim.example.com/apps`):

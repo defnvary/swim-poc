@@ -1,4 +1,5 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { config } from '../config.js';
 import { run, type RunResult } from '../lib/exec.js';
 
@@ -9,10 +10,14 @@ export const CERTS_VOLUME = 'swim_swim-certs';
 export const WEBROOT_VOLUME = 'swim_swim-webroot';
 export const EDGE_NETWORK = 'swim-edge';
 
-export const appDir = (slug: string): string => `/data/apps/${slug}`;
-export const srcDir = (slug: string): string => `/data/apps/${slug}/src`;
-const composeFile = (slug: string): string => `${appDir(slug)}/compose.yaml`;
+export const appDir = (slug: string): string => join(config.dataDir, 'apps', slug);
+export const srcDir = (slug: string): string => join(appDir(slug), 'src');
+const composeFile = (slug: string): string => join(appDir(slug), 'compose.yaml');
 const projectName = (slug: string): string => `swim-app-${slug}`;
+
+// 06 §13 — one plain-text log file per deployment, appended across all steps (07 §8)
+export const deploymentLogFile = (deploymentId: string): string =>
+  join(config.dataDir, 'logs/deployments', `${deploymentId}.log`);
 
 export interface ComposeOptions {
   noBuild?: boolean;
@@ -93,12 +98,10 @@ export const renewCertArgs = (): string[] => ['renew', '--webroot', '-w', '/var/
 export const reloadNginx = async (args: string[]): Promise<RunResult> =>
   run('docker', ['exec', 'swim-nginx', ...args]);
 
-// 05 §4 — app deletion removes the /data/apps/<slug> tree and that app's deployment log files
+// 05 §4 — app deletion removes the <dataDir>/apps/<slug> tree and that app's deployment log files
 export const removeAppData = async (slug: string, deploymentIds: string[]): Promise<void> => {
   await rm(appDir(slug), { recursive: true, force: true });
-  await Promise.all(
-    deploymentIds.map((id) => rm(`/data/logs/deployments/${id}.log`, { force: true }).catch(() => undefined)),
-  );
+  await Promise.all(deploymentIds.map((id) => rm(deploymentLogFile(id), { force: true }).catch(() => undefined)));
 };
 
 // compose.yaml template — 07 §4.3 verbatim, deterministic in (slug, sha, port, path, buildType)

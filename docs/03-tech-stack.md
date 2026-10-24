@@ -74,6 +74,7 @@ POSTGRES_PASSWORD      strong generated password (platform compose)
 DOCKER_GID             host docker group gid (build arg; lets the api run as non-root)
 SWIM_DEPLOY_TIMEOUT    seconds to wait for container health, default 120
 SWIM_MAX_BUILDS        global concurrent builds, default 2
+SWIM_DATA_DIR          root for generated artifacts, default /data (the swim-data volume)
 NODE_ENV               production
 ```
 

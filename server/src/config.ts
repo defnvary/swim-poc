@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { z } from 'zod';
 
 // base64 string that decodes to exactly `bytes` (or at least, when min) or more bytes
@@ -21,6 +22,7 @@ const envSchema = z
     DOCKER_GID: z.coerce.number().int().nonnegative().optional(),
     SWIM_DEPLOY_TIMEOUT: z.coerce.number().int().positive().default(120),
     SWIM_MAX_BUILDS: z.coerce.number().int().positive().default(2),
+    SWIM_DATA_DIR: z.string().min(1).default('/data'),
     NODE_ENV: z.enum(['production', 'development', 'test']).default('development'),
   })
   .superRefine((env, ctx) => {
@@ -46,6 +48,9 @@ export const config = {
   dockerGid: parsed.data.DOCKER_GID,
   deployTimeoutSeconds: parsed.data.SWIM_DEPLOY_TIMEOUT,
   maxBuilds: parsed.data.SWIM_MAX_BUILDS,
+  // root for generated artifacts (01 §volumes). Production is the swim-data volume at /data;
+  // SWIM_DATA_DIR lets a rootless dev box relocate it, e.g. ./data.
+  dataDir: resolve(parsed.data.SWIM_DATA_DIR),
   nodeEnv: parsed.data.NODE_ENV,
 };
 export type Config = typeof config;
