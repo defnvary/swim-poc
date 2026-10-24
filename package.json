@@ -1,0 +1,14 @@
+{
+  "name": "swim",
+  "private": true,
+  "workspaces": ["server", "dashboard"],
+  "scripts": {
+    "dev": "concurrently -n api,web \"npm -w server run dev\" \"npm -w dashboard run dev\"",
+    "build": "npm -w dashboard run build && npm -w server run build",
+    "test": "npm -w server test && npm -w dashboard test",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}
