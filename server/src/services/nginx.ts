@@ -134,10 +134,17 @@ export const writeVhost = async (
 //  invalid — nginx -t rejected the file → the file is removed, previous config keeps running
 //  absent  — swim-nginx is not running yet (compose starts it after api is healthy, 08 §2)
 //            → the file stays on the volume and is read when nginx starts, no reload needed
-const nginxTest = async (): Promise<'ok' | 'invalid' | 'absent'> => {
-  if (!(await nginxRunning())) return 'absent';
+const nginxTest = async (): Promise<
+  | { status: 'ok' }
+  | { status: 'absent' }
+  | { status: 'invalid'; reason: string }
+> => {
+  if (!(await nginxRunning())) return { status: 'absent' };
   const test = await reloadNginx(['nginx', '-t']);
-  return test.code === 0 ? 'ok' : 'invalid';
+  if (test.code === 0) return { status: 'ok' };
+  // nginx writes the complaint to stderr; without it a rejected vhost is undebuggable.
+  const reason = test.output.trim().split('\n').slice(-3).join(' | ');
+  return { status: 'invalid', reason };
 };
 
 // The full §4 sequence for a change: write → nginx -t (delete the offending file
@@ -148,13 +155,15 @@ export const writeVhostAndReload = async (
 ): Promise<void> => {
   await writeVhost(host, content);
   const test = await nginxTest();
-  if (test === 'invalid') {
+  if (test.status === 'invalid') {
     await removeVhost(host);
-    log.error(`nginx config test failed for ${host}`);
+    log.error({ host, reason: test.reason }, 'nginx config test failed');
     return;
   }
-  if (test === 'absent') {
-    log.info(`swim-nginx not running — kept ${host}.conf, loaded when nginx starts`);
+  if (test.status === 'absent') {
+    log.info(
+      `swim-nginx not running — kept ${host}.conf, loaded when nginx starts`,
+    );
     return;
   }
   await reloadNginx(['nginx', '-s', 'reload']);
@@ -201,9 +210,13 @@ export const rewriteAllVhosts = async (): Promise<void> => {
 // the generated files are already on the volume nginx mounts at start (08 §2).
 export const reload = async (): Promise<void> => {
   const test = await nginxTest();
-  if (test === 'invalid') throw new Error('nginx config test failed');
-  if (test === 'absent') {
-    log.info('swim-nginx not running — vhost files kept, loaded when nginx starts');
+  if (test.status === 'invalid') {
+    throw new Error(`nginx config test failed: ${test.reason}`);
+  }
+  if (test.status === 'absent') {
+    log.info(
+      'swim-nginx not running — vhost files kept, loaded when nginx starts',
+    );
     return;
   }
   await reloadNginx(['nginx', '-s', 'reload']);
