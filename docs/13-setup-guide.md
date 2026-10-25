@@ -71,6 +71,8 @@ If the dashboard does not come up: check DNS (§2), wait a minute, then docker c
 3. **Wire the webhook**: GitHub repo → Settings → Webhooks → Add webhook: payload URL = the shown URL, content type application/json, secret = the shown secret, events = Just the push event. GitHub's initial ping is answered 200 and ignored (06 §12).
 4. Push to the tracked branch → the deployment appears in the dashboard → status turns live → the app answers at https://<slug>.<SWIM_DOMAIN>.
 
+**Expected first-app wrinkle:** creating the app fires cert issuance for `<slug>.<SWIM_DOMAIN>` immediately (09 §5), which is normally *before* the first deploy has started a container. The stage-2 vhost then names an upstream that does not resolve, `nginx -t` rejects it and the file is deleted (09 §5.1) — while the Domain row still shows `issued`. So step 4 can end with a valid certificate and an empty reply. Once the deployment is live, run `docker compose restart api`: boot reconciliation rewrites the vhost and reloads, and the app answers. Later deploys are unaffected, because the container is already running when the cert is issued.
+
 Lost the webhook secret? Rotate it in app Settings — a new URL and secret are issued and the old URL stops working immediately (06 §5).
 
 ## 6. Day-2 operations
@@ -108,6 +110,7 @@ docker compose start api
 | Old container still serving after a failed deploy | expected behavior | failed deploys never touch the running version (01 §8) — redeploy or roll back |
 | api cannot talk to docker (permission denied) | docker compose logs api | DOCKER_GID mismatch — re-run stat -c %g /var/run/docker.sock, update .env, rebuild (08 §3) |
 | 502 from an app domain | docker logs swim-app-<slug> | app crashed or is stopped — restart via dashboard |
+| App domain returns an empty reply though its cert is valid | docker compose logs api \| grep 'nginx config test failed' | the stage-2 vhost was rejected because the app container was not up when the cert issued (09 §5.1) — start the app, then docker compose restart api |
 | db down | docker compose logs db | restart: unless-stopped self-heals; api's healthcheck follows |
 
 ## 8. Full teardown (destructive)

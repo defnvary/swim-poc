@@ -181,6 +181,8 @@ server {
 
 All templates are deterministic functions of `(host, slug, port, SWIM_DOMAIN)` — boot-time reconciliation regenerates byte-identical files (01 §9.3, 07 §10).
 
+A literal upstream is resolved **at parse time**: `nginx -t` fails with `host not found in upstream "swim-app-<slug>"` when that container is not running on `swim-edge`. Stage-2 vhosts therefore require a live app container — see §5.1 for the consequence and the recovery.
+
 ## 4. Reload protocol (`services/nginx.ts`)
 
 Every vhost change follows the same sequence:
@@ -211,6 +213,29 @@ the file in that case would make the platform bootstrap impossible (see §7).
 **Delete domain** (`DELETE /api/domains/:id`): remove the vhost file → reload → delete the row. Cert files stay in the volume (certbot self-manages `/etc/letsencrypt/archive`); expiry cleans up the rest.
 
 **Verify** (`POST /api/domains/:id/verify`): resolve `A` records for the host **and** for `swim.<SWIM_DOMAIN>` (the platform's own host); `pointsToServer` = the two record sets intersect. If `certStatus = failed` and DNS is correct → retry issuance once. This is the only retry path (§9). The default `<slug>.<SWIM_DOMAIN>` domain cannot be deleted while the app exists (06 §8).
+
+### 5.1 Known ordering hole — stage-2 vhost written before the app container exists (v1, unfixed)
+
+`issueCert`'s success path (step 2 above) writes the stage-2 vhost at the moment the certificate
+is issued. Nothing in the deploy pipeline sequences that against the app container: if the domain
+was added **before** the first deploy (or the deploy failed / is still running), the container
+`swim-app-<slug>` is absent, `nginx -t` rejects the file with `host not found in upstream` (§3.2),
+and §4 step 2 **deletes** it. The Domain row still reaches `certStatus = issued` — the status update
+is not gated on the reload, which swallows its own error.
+
+Observable result: the host resolves, its certificate is valid, but no server block matches it, so
+the `catch_all` server answers 444 (`NS_ERROR_NET_EMPTY_RESPONSE` / empty reply) and the dashboard
+reports the domain as issued.
+
+**Recovery (operator):** get the container running on `swim-edge`, then `docker compose restart api`.
+Boot reconciliation step 3 (07 §10) regenerates every vhost from the Domain table — `issued` →
+stage 2 — and reloads once; with a resolvable upstream the test passes.
+
+Not fixed deliberately. Candidates for a later phase, each a contract change:
+1. rewrite the app's `issued` domains after a deployment reaches `live` (07 §7) — templates stay byte-identical;
+2. `resolver 127.0.0.11 valid=10s;` + `set $upstream http://swim-app-<slug>:<port>;` +
+   `proxy_pass $upstream$request_uri;` so parse never depends on container state (502 while down,
+   self-healing on start) — rewrites the §3.2 template and changes URI handling.
 
 ## 6. certbot invocations (exact — via `services/docker.ts runCertbot`)
 

@@ -185,6 +185,8 @@ docker inspect --format {{.State.Health.Status}} swim-app-<slug>
 
 On healthy: deployment → `live`; `app.currentDeploymentId = deployment.id`; `app.status = live`; `event('deploy.live')`; emit `done` on the SSE stream.
 
+Completion does **not** touch nginx: vhosts are written by cert issuance and by reconciliation only (`09-nginx-domains-ssl.md` §5). So an app whose domain was added before its first successful deploy keeps the rejected-vhost state until something rewrites it — boot step 3 (§10) or a manual `docker compose restart api` (`09` §5.1).
+
 ## 8. Deployment log format
 
 `/data/logs/deployments/<deploymentId>.log`, appended across all steps:
